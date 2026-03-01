@@ -100,6 +100,41 @@ struct MLXServerClient: Sendable {
         }
     }
 
+    nonisolated func chat(
+        messages: [ChatRequest.Message],
+        model: String,
+        maxTokens: Int = 512
+    ) async throws -> String {
+        let url = try makeURL("/v1/chat/completions")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var chatRequest = ChatRequest(model: model, messages: messages)
+        chatRequest.stream = false
+        chatRequest.max_tokens = maxTokens
+        request.httpBody = try JSONEncoder().encode(chatRequest)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw ServerError.invalidResponse
+        }
+
+        struct ChatCompletion: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    var content: String
+                }
+                var message: Message
+            }
+            var choices: [Choice]
+        }
+
+        let completion = try JSONDecoder().decode(ChatCompletion.self, from: data)
+        return completion.choices.first?.message.content ?? ""
+    }
+
     nonisolated func checkConnection() async -> (Bool, String?) {
         do {
             let url = try makeURL("/v1/models")

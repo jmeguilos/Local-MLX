@@ -8,6 +8,7 @@ final class Conversation {
     var createdAt: Date
     var updatedAt: Date
     var systemPrompt: String?
+    var isArchived: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.conversation)
     var messages: [ChatMessage]
@@ -26,6 +27,7 @@ final class Conversation {
     }
 
     var lastMessagePreview: String {
-        sortedMessages.last?.content.prefix(80).description ?? ""
+        let lastUserMessage = sortedMessages.last(where: { $0.role == .user })
+        return lastUserMessage?.content.prefix(80).description ?? ""
     }
 }

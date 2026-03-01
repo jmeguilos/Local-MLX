@@ -3,7 +3,8 @@ import SwiftData
 
 @main
 struct Local_MLXApp: App {
-    let modelContainer: ModelContainer
+    let dataContainer: SwiftData.ModelContainer
+    @State private var modelManager = ModelManager()
 
     init() {
         do {
@@ -12,17 +13,30 @@ struct Local_MLXApp: App {
                 ChatMessage.self,
                 ServerConfig.self,
             ])
-            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-            modelContainer = try ModelContainer(for: schema, configurations: [config])
+            let config = SwiftData.ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+            dataContainer = try SwiftData.ModelContainer(for: schema, configurations: [config])
         } catch {
             fatalError("Could not initialize ModelContainer: \(error)")
         }
     }
 
+    #if os(iOS)
+    @State private var showSplash = true
+    #endif
+
     var body: some Scene {
         WindowGroup {
-            MainView()
+            ZStack {
+                MainView(modelManager: modelManager)
+                #if os(iOS)
+                if showSplash {
+                    SplashScreenView {
+                        withAnimation { showSplash = false }
+                    }
+                }
+                #endif
+            }
         }
-        .modelContainer(modelContainer)
+        .modelContainer(dataContainer)
     }
 }
