@@ -14,6 +14,10 @@ final class ChatMessage {
     var content: String
     var timestamp: Date
     var conversation: Conversation?
+    var isEdited: Bool = false
+    var promptTokens: Int?
+    var completionTokens: Int?
+    var imageAttachmentPaths: [String] = []
 
     init(role: MessageRole, content: String, conversation: Conversation? = nil) {
         self.id = UUID()
@@ -21,5 +25,10 @@ final class ChatMessage {
         self.content = content
         self.timestamp = Date()
         self.conversation = conversation
+    }
+
+    var totalTokens: Int? {
+        guard let prompt = promptTokens, let completion = completionTokens else { return nil }
+        return prompt + completion
     }
 }

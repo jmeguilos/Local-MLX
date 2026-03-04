@@ -1,4 +1,5 @@
 import SwiftUI
+import HighlightSwift
 
 // MARK: - Think Parser
 
@@ -47,68 +48,18 @@ enum ThinkParser {
     }
 }
 
-// MARK: - Content Parser
-
-enum ContentSegment: Identifiable {
-    case text(String)
-    case codeBlock(language: String, code: String)
-
-    var id: String {
-        switch self {
-        case .text(let s): return "text-\(s.hashValue)"
-        case .codeBlock(let lang, let code): return "code-\(lang)-\(code.hashValue)"
-        }
-    }
-}
-
-enum ContentParser {
-    static func parse(_ content: String) -> [ContentSegment] {
-        var segments: [ContentSegment] = []
-
-        let strippedContent = ThinkParser.parse(content).visible
-
-        guard let regex = try? NSRegularExpression(pattern: "```(\\w*)\\n([\\s\\S]*?)```", options: []) else {
-            return [.text(strippedContent)]
-        }
-
-        let nsContent = strippedContent as NSString
-        var lastEnd = 0
-        let matches = regex.matches(in: strippedContent, range: NSRange(location: 0, length: nsContent.length))
-
-        for match in matches {
-            let matchStart = match.range.location
-            if matchStart > lastEnd {
-                let before = nsContent.substring(with: NSRange(location: lastEnd, length: matchStart - lastEnd))
-                if !before.isEmpty {
-                    segments.append(.text(before))
-                }
-            }
-
-            let language = match.numberOfRanges > 1 ? nsContent.substring(with: match.range(at: 1)) : ""
-            let code = match.numberOfRanges > 2 ? nsContent.substring(with: match.range(at: 2)) : ""
-            segments.append(.codeBlock(
-                language: language.isEmpty ? "code" : language,
-                code: code.hasSuffix("\n") ? String(code.dropLast()) : code
-            ))
-
-            lastEnd = match.range.location + match.range.length
-        }
-
-        if lastEnd < nsContent.length {
-            segments.append(.text(nsContent.substring(from: lastEnd)))
-        }
-
-        return segments.isEmpty ? [.text(strippedContent)] : segments
-    }
-}
-
-// MARK: - Code Block View
+// MARK: - Code Block View (Enhanced with HighlightSwift)
 
 struct CodeBlockView: View {
     let language: String
     let code: String
 
     @State private var copied = false
+    @State private var highlightedCode: AttributedString?
+
+    private var highlight: Highlight {
+        Highlight()
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -144,15 +95,36 @@ struct CodeBlockView: View {
 
             // Code content
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let highlighted = highlightedCode {
+                    Text(highlighted)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(code)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .background(Color.codeBlockBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .padding(.vertical, 4)
+        .task {
+            await highlightCode()
+        }
+    }
+
+    private func highlightCode() async {
+        guard language != "code" else { return }
+        do {
+            let result = try await highlight.request(code, mode: .languageAlias(language))
+            highlightedCode = result.attributedText
+        } catch {
+            // Fallback to plain text - already shown
+        }
     }
 }

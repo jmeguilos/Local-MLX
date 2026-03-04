@@ -56,7 +56,9 @@ struct MLXServerClient: Sendable {
 
     nonisolated func streamChat(
         messages: [ChatRequest.Message],
-        model: String
+        model: String,
+        temperature: Float = 0.7,
+        maxTokens: Int = 2048
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -66,10 +68,12 @@ struct MLXServerClient: Sendable {
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-                    let chatRequest = ChatRequest(
+                    var chatRequest = ChatRequest(
                         model: model,
                         messages: messages
                     )
+                    chatRequest.temperature = Double(temperature)
+                    chatRequest.max_tokens = maxTokens
                     request.httpBody = try JSONEncoder().encode(chatRequest)
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -81,6 +85,10 @@ struct MLXServerClient: Sendable {
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
                         if StreamingParser.isStreamDone(line) { break }
+                        // Check for token usage in the line
+                        if let usage = StreamingParser.parseUsage(line) {
+                            continuation.yield("[USAGE:\(usage.promptTokens),\(usage.completionTokens)]")
+                        }
                         if let token = StreamingParser.parseSSELine(line) {
                             continuation.yield(token)
                         }

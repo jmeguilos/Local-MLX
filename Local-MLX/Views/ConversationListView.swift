@@ -12,6 +12,9 @@ struct ConversationListView: View {
     @Query(sort: \Conversation.updatedAt, order: .reverse)
     private var conversations: [Conversation]
 
+    @Query(sort: \Folder.name)
+    private var folders: [Folder]
+
     @Environment(\.modelContext) private var modelContext
 
     @State private var renamingConversation: Conversation?
@@ -20,6 +23,9 @@ struct ConversationListView: View {
     @FocusState private var isInputFocused: Bool
 
     @State private var showArchived = false
+    @State private var showNewFolderAlert = false
+    @State private var newFolderName = ""
+    @State private var moveToFolderConversation: Conversation?
 
     private var filteredConversations: [Conversation] {
         let active = conversations.filter { !$0.isArchived }
@@ -35,9 +41,14 @@ struct ConversationListView: View {
         conversations.filter { $0.isArchived }
     }
 
+    private var unfolderedConversations: [Conversation] {
+        filteredConversations.filter { $0.folder == nil }
+    }
+
     private var groupedConversations: [(String, [Conversation])] {
         let calendar = Calendar.current
         let now = Date()
+        let convos = unfolderedConversations
 
         var today: [Conversation] = []
         var yesterday: [Conversation] = []
@@ -45,7 +56,7 @@ struct ConversationListView: View {
         var previous30Days: [Conversation] = []
         var older: [Conversation] = []
 
-        for conversation in filteredConversations {
+        for conversation in convos {
             let date = conversation.updatedAt
             if calendar.isDateInToday(date) {
                 today.append(conversation)
@@ -116,6 +127,34 @@ struct ConversationListView: View {
             .listRowSeparator(.hidden)
             #endif
 
+            // Folder sections (F12)
+            ForEach(folders) { folder in
+                Section {
+                    DisclosureGroup {
+                        let folderConvos = filteredConversations.filter { $0.folder?.id == folder.id }
+                            .sorted { $0.updatedAt > $1.updatedAt }
+                        ForEach(folderConvos) { conversation in
+                            NavigationLink(value: conversation) {
+                                conversationRow(conversation)
+                            }
+                            .contextMenu {
+                                conversationContextMenu(conversation, inFolder: true)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                                .font(.caption)
+                            Text(folder.name)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Unfoldered conversations grouped by time
             ForEach(groupedConversations, id: \.0) { group, convos in
                 Section {
                     ForEach(convos) { conversation in
@@ -144,28 +183,7 @@ struct ConversationListView: View {
                             .tint(.blue)
                         }
                         .contextMenu {
-                            Button {
-                                renameText = conversation.title
-                                renamingConversation = conversation
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            Button {
-                                if selectedConversation?.id == conversation.id {
-                                    selectedConversation = nil
-                                }
-                                listViewModel.archiveConversation(conversation)
-                            } label: {
-                                Label("Archive", systemImage: "archivebox")
-                            }
-                            Button(role: .destructive) {
-                                if selectedConversation?.id == conversation.id {
-                                    selectedConversation = nil
-                                }
-                                listViewModel.deleteConversation(conversation)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                            conversationContextMenu(conversation, inFolder: false)
                         }
                     }
                 } header: {
@@ -232,21 +250,35 @@ struct ConversationListView: View {
         .searchable(text: $listViewModel.searchText, prompt: "Search")
         .navigationTitle("Chats")
         .safeAreaInset(edge: .bottom) {
-            Button {
-                onSettingsTap()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "gear")
-                        .font(.subheadline)
-                    Text("Settings")
-                        .font(.subheadline)
+            HStack {
+                Button {
+                    onSettingsTap()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "gear")
+                            .font(.subheadline)
+                        Text("Settings")
+                            .font(.subheadline)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button {
+                    showNewFolderAlert = true
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.ultraThinMaterial)
         }
         .alert("Rename Conversation", isPresented: .init(
@@ -263,6 +295,92 @@ struct ConversationListView: View {
                 }
                 renamingConversation = nil
             }
+        }
+        .alert("New Folder", isPresented: $showNewFolderAlert) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Cancel", role: .cancel) {
+                newFolderName = ""
+            }
+            Button("Create") {
+                let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                let folder = Folder(name: trimmed)
+                modelContext.insert(folder)
+                try? modelContext.save()
+                newFolderName = ""
+            }
+        }
+        .confirmationDialog("Move to Folder", isPresented: .init(
+            get: { moveToFolderConversation != nil },
+            set: { if !$0 { moveToFolderConversation = nil } }
+        )) {
+            Button("None (Remove from folder)") {
+                moveToFolderConversation?.folder = nil
+                try? modelContext.save()
+                moveToFolderConversation = nil
+            }
+            ForEach(folders) { folder in
+                Button(folder.name) {
+                    moveToFolderConversation?.folder = folder
+                    try? modelContext.save()
+                    moveToFolderConversation = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                moveToFolderConversation = nil
+            }
+        }
+    }
+
+    // MARK: - Context Menu
+
+    @ViewBuilder
+    private func conversationContextMenu(_ conversation: Conversation, inFolder: Bool) -> some View {
+        Button {
+            renameText = conversation.title
+            renamingConversation = conversation
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+
+        Button {
+            moveToFolderConversation = conversation
+        } label: {
+            Label("Move to Folder…", systemImage: "folder")
+        }
+
+        // Export submenu (F11)
+        Menu {
+            Button {
+                ExportHelper.exportMarkdown(conversation: conversation)
+            } label: {
+                Label("Markdown", systemImage: "doc.text")
+            }
+            Button {
+                ExportHelper.exportJSON(conversation: conversation)
+            } label: {
+                Label("JSON", systemImage: "curlybraces")
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+
+        Button {
+            if selectedConversation?.id == conversation.id {
+                selectedConversation = nil
+            }
+            listViewModel.archiveConversation(conversation)
+        } label: {
+            Label("Archive", systemImage: "archivebox")
+        }
+
+        Button(role: .destructive) {
+            if selectedConversation?.id == conversation.id {
+                selectedConversation = nil
+            }
+            listViewModel.deleteConversation(conversation)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 

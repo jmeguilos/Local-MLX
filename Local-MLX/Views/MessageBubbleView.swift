@@ -8,8 +8,10 @@ struct MessageRowView: View {
     var streamingThinking: String = ""
     var isInThinkBlock: Bool = false
     var thinkingDuration: TimeInterval? = nil
+    var isEdited: Bool = false
     let onCopy: (() -> Void)?
     let onRegenerate: (() -> Void)?
+    var onEdit: ((String) -> Void)? = nil
 
     init(
         message: ChatMessage,
@@ -18,8 +20,10 @@ struct MessageRowView: View {
         streamingThinking: String = "",
         isInThinkBlock: Bool = false,
         thinkingDuration: TimeInterval? = nil,
+        isEdited: Bool = false,
         onCopy: (() -> Void)? = nil,
-        onRegenerate: (() -> Void)? = nil
+        onRegenerate: (() -> Void)? = nil,
+        onEdit: ((String) -> Void)? = nil
     ) {
         self.message = message
         self.isStreaming = isStreaming
@@ -27,8 +31,10 @@ struct MessageRowView: View {
         self.streamingThinking = streamingThinking
         self.isInThinkBlock = isInThinkBlock
         self.thinkingDuration = thinkingDuration
+        self.isEdited = isEdited
         self.onCopy = onCopy
         self.onRegenerate = onRegenerate
+        self.onEdit = onEdit
     }
 
     private var isUser: Bool { message.role == .user }
@@ -39,22 +45,40 @@ struct MessageRowView: View {
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(isUser ? "You" : "Assistant")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Text(isUser ? "You" : "Assistant")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+
+                    if isEdited {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
 
                 if !isUser {
                     assistantContent
                         .animation(.easeInOut(duration: 0.2), value: isStreaming)
                 } else {
-                    renderedContent
+                    userContent
                 }
 
                 if !isUser && !isStreaming && !message.content.isEmpty {
-                    actionBar
-                        .transition(.opacity)
-                        .animation(.easeInOut(duration: 0.3).delay(0.1), value: isStreaming)
+                    HStack {
+                        actionBar
+
+                        // Token usage badge (F19)
+                        if let tokens = message.totalTokens {
+                            Text("\(tokens) tokens")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, 8)
+                        }
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.3).delay(0.1), value: isStreaming)
                 }
             }
 
@@ -63,6 +87,46 @@ struct MessageRowView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(isUser ? Color.userMessageBackground : Color.clear)
+    }
+
+    // MARK: - User Content
+
+    @ViewBuilder
+    private var userContent: some View {
+        // Image attachments (F18)
+        if !message.imageAttachmentPaths.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(message.imageAttachmentPaths, id: \.self) { path in
+                        if let data = FileManager.default.contents(atPath: path) {
+                            #if os(macOS)
+                            if let nsImage = NSImage(data: data) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 120, height: 120)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            #else
+                            if let uiImage = UIImage(data: data) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 120, height: 120)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            #endif
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 4)
+        }
+
+        Text(markdownInline(message.content))
+            .font(.body)
+            .textSelection(.enabled)
+            .lineSpacing(3)
     }
 
     // MARK: - Assistant Content
@@ -90,10 +154,11 @@ struct MessageRowView: View {
                     )
                 }
 
-                Text(markdownString(parsed.visible))
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .lineSpacing(3)
+                // During streaming, use lightweight regex parser
+                let segments = ContentParser.parseStreaming(parsed.visible)
+                ForEach(segments) { segment in
+                    streamingSegmentView(segment)
+                }
 
                 BlinkingCursor()
             }
@@ -114,20 +179,67 @@ struct MessageRowView: View {
         }
     }
 
-    // MARK: - Rendered Content with Code Blocks
+    // MARK: - Rendered Content with Rich Blocks
 
     @ViewBuilder
     private var renderedContent: some View {
         let segments = ContentParser.parse(message.content)
         ForEach(segments) { segment in
-            switch segment {
-            case .text(let text):
-                Text(markdownString(text))
+            richSegmentView(segment)
+        }
+    }
+
+    @ViewBuilder
+    private func richSegmentView(_ segment: ContentSegment) -> some View {
+        switch segment {
+        case .text(let text):
+            Text(markdownInline(text))
+                .font(.body)
+                .textSelection(.enabled)
+                .lineSpacing(3)
+        case .codeBlock(let language, let code):
+            CodeBlockView(language: language, code: code)
+        case .heading(let level, let text):
+            HeadingView(level: level, text: text)
+        case .blockquote(let text):
+            BlockquoteView(text: text)
+        case .orderedList(let items):
+            OrderedListView(items: items)
+        case .unorderedList(let items):
+            UnorderedListView(items: items)
+        case .table(let headers, let rows):
+            TableBlockView(headers: headers, rows: rows)
+        case .latex(let latex):
+            LaTeXBlockView(latex: latex)
+        case .mermaid(let code):
+            MermaidBlockView(code: code)
+        case .thematicBreak:
+            ThematicBreakView()
+        }
+    }
+
+    @ViewBuilder
+    private func streamingSegmentView(_ segment: ContentSegment) -> some View {
+        switch segment {
+        case .text(let text):
+            Text(markdownInline(text))
+                .font(.body)
+                .textSelection(.enabled)
+                .lineSpacing(3)
+        case .codeBlock(let language, let code):
+            CodeBlockView(language: language, code: code)
+        case .mermaid(let code):
+            // During streaming, show mermaid as code block
+            CodeBlockView(language: "mermaid", code: code)
+        default:
+            // During streaming, render other blocks as simple text
+            if case .heading(_, let text) = segment {
+                Text(markdownInline(text))
                     .font(.body)
+                    .fontWeight(.bold)
                     .textSelection(.enabled)
-                    .lineSpacing(3)
-            case .codeBlock(let language, let code):
-                CodeBlockView(language: language, code: code)
+            } else {
+                EmptyView()
             }
         }
     }
@@ -198,12 +310,6 @@ struct MessageRowView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
-    }
-
-    // MARK: - Helpers
-
-    private func markdownString(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     }
 }
 

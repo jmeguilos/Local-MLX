@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct MessageInputView: View {
     let isGenerating: Bool
@@ -10,12 +11,16 @@ struct MessageInputView: View {
     let onStop: () -> Void
     let onModelChange: (String) -> Void
     var onLocalModelChange: ((String) -> Void)? = nil
+    var onToggleParameters: (() -> Void)? = nil
+    var onImageAttach: (([Data]) -> Void)? = nil
 
     @State private var inputText = ""
     @FocusState private var isFocused: Bool
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var attachedImages: [Data] = []
 
     private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachedImages.isEmpty
     }
 
     var body: some View {
@@ -24,17 +29,14 @@ struct MessageInputView: View {
             if let manager = modelManager, let config = serverConfig {
                 HStack {
                     if config.isLocalMode {
-                        // Local mode: interactive chip listing saved models
                         LocalModelSwitchChip(
                             modelManager: manager,
                             config: config,
                             onLocalModelChange: onLocalModelChange
                         )
                     } else if !availableModels.isEmpty {
-                        // Server mode with available models: show picker
                         modelPickerChip
                     } else {
-                        // Server mode fallback: non-interactive status
                         ModelStatusChip(modelManager: manager, config: config)
                     }
                     Spacer()
@@ -48,7 +50,87 @@ struct MessageInputView: View {
                 .padding(.horizontal, 20)
             }
 
+            // Image thumbnails
+            if !attachedImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(attachedImages.enumerated()), id: \.offset) { idx, imageData in
+                            ZStack(alignment: .topTrailing) {
+                                #if os(macOS)
+                                if let nsImage = NSImage(data: imageData) {
+                                    Image(nsImage: nsImage)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 60, height: 60)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                                #else
+                                if let uiImage = UIImage(data: imageData) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 60, height: 60)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                                #endif
+                                Button {
+                                    attachedImages.remove(at: idx)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.white)
+                                        .background(Circle().fill(.black.opacity(0.5)))
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 4, y: -4)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
+                // Parameters toggle
+                if onToggleParameters != nil {
+                    Button {
+                        onToggleParameters?()
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 10)
+                    .padding(.bottom, 10)
+                }
+
+                // Image attachment (F18)
+                PhotosPicker(
+                    selection: $selectedPhotos,
+                    maxSelectionCount: 4,
+                    matching: .images
+                ) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, onToggleParameters == nil ? 10 : 0)
+                .padding(.bottom, 10)
+                .onChange(of: selectedPhotos) {
+                    Task {
+                        var newImages: [Data] = []
+                        for item in selectedPhotos {
+                            if let data = try? await item.loadTransferable(type: Data.self) {
+                                newImages.append(data)
+                            }
+                        }
+                        attachedImages.append(contentsOf: newImages)
+                        selectedPhotos = []
+                    }
+                }
+
                 // Text input
                 TextField("Message", text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -141,10 +223,16 @@ struct MessageInputView: View {
 
     private func send() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !attachedImages.isEmpty else { return }
+
+        if !attachedImages.isEmpty {
+            onImageAttach?(attachedImages)
+            attachedImages = []
+        }
+
         inputText = ""
         HapticManager.medium()
-        onSend(text)
+        onSend(text.isEmpty ? "[Image attached]" : text)
     }
 }
 
@@ -178,7 +266,6 @@ struct LocalModelSwitchChip: View {
 
     var body: some View {
         if config.savedLocalModelIDs.isEmpty {
-            // No saved models — just show status chip (non-interactive)
             ModelStatusChip(modelManager: modelManager, config: config)
         } else {
             Menu {

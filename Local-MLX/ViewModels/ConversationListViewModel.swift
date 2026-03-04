@@ -20,6 +20,20 @@ final class ConversationListViewModel {
         return conversation
     }
 
+    @discardableResult
+    func createConversationFromPersona(_ persona: Persona) -> Conversation {
+        let conversation = Conversation(systemPrompt: persona.systemPrompt)
+        if let temp = persona.temperature {
+            conversation.temperature = temp
+        }
+        if let tokens = persona.maxTokens {
+            conversation.maxTokens = tokens
+        }
+        modelContext?.insert(conversation)
+        try? modelContext?.save()
+        return conversation
+    }
+
     func deleteConversation(_ conversation: Conversation) {
         modelContext?.delete(conversation)
         try? modelContext?.save()

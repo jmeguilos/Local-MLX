@@ -12,6 +12,8 @@ struct Local_MLXApp: App {
                 Conversation.self,
                 ChatMessage.self,
                 ServerConfig.self,
+                Folder.self,
+                Persona.self,
             ])
             let config = SwiftData.ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             dataContainer = try SwiftData.ModelContainer(for: schema, configurations: [config])

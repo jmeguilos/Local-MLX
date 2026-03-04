@@ -9,6 +9,9 @@ final class Conversation {
     var updatedAt: Date
     var systemPrompt: String?
     var isArchived: Bool = false
+    var temperature: Double?
+    var maxTokens: Int?
+    var folder: Folder?
 
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.conversation)
     var messages: [ChatMessage]

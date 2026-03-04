@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		68C1264744304037A8D48F3B /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DBF270C79EBB4D80A55171CB /* MLXLLM */; };
 		81BBD0A6C39140238DCBD141 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FB97E226A30145B7B42E5BC6 /* MLXLMCommon */; };
+		A1B2C3D4E5F647A8B9C0D1E2 /* HighlightSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F647A8B9C0D1E3 /* HighlightSwift */; };
+		B2C3D4E5F6A748B9C0D1E2F3 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E5F6A748B9C0D1E2F4 /* Markdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +45,8 @@
 			files = (
 				68C1264744304037A8D48F3B /* MLXLLM in Frameworks */,
 				81BBD0A6C39140238DCBD141 /* MLXLMCommon in Frameworks */,
+				A1B2C3D4E5F647A8B9C0D1E2 /* HighlightSwift in Frameworks */,
+				B2C3D4E5F6A748B9C0D1E2F3 /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,6 +91,8 @@
 			packageProductDependencies = (
 				DBF270C79EBB4D80A55171CB /* MLXLLM */,
 				FB97E226A30145B7B42E5BC6 /* MLXLMCommon */,
+				A1B2C3D4E5F647A8B9C0D1E3 /* HighlightSwift */,
+				B2C3D4E5F6A748B9C0D1E2F4 /* Markdown */,
 			);
 			productName = "Local-MLX";
 			productReference = 36B3200B2F524ED400D387EC /* Local-MLX.app */;
@@ -118,6 +124,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0DEB695214194D76AC72FC24 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				C3D4E5F6A7B849C0D1E2F3A4 /* XCRemoteSwiftPackageReference "HighlightSwift" */,
+				D4E5F6A7B8C94AD1E2F3A4B5 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 36B3200C2F524ED400D387EC /* Products */;
@@ -366,9 +374,35 @@
 				kind = branch;
 			};
 		};
+		C3D4E5F6A7B849C0D1E2F3A4 /* XCRemoteSwiftPackageReference "HighlightSwift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/appstefan/HighlightSwift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+		D4E5F6A7B8C94AD1E2F3A4B5 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A1B2C3D4E5F647A8B9C0D1E3 /* HighlightSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3D4E5F6A7B849C0D1E2F3A4 /* XCRemoteSwiftPackageReference "HighlightSwift" */;
+			productName = HighlightSwift;
+		};
+		B2C3D4E5F6A748B9C0D1E2F4 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D4E5F6A7B8C94AD1E2F3A4B5 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
 		DBF270C79EBB4D80A55171CB /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 0DEB695214194D76AC72FC24 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;

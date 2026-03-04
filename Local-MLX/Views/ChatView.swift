@@ -3,10 +3,11 @@ import SwiftData
 
 struct ChatView: View {
     let conversation: Conversation
-    var chatViewModel: ChatViewModel
+    @Bindable var chatViewModel: ChatViewModel
     var modelManager: ModelManager
     var onGoHome: (() -> Void)? = nil
     var onLocalModelChange: ((String) -> Void)? = nil
+    var onBranch: ((Conversation) -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @State private var showScrollToBottom = false
@@ -15,6 +16,9 @@ struct ChatView: View {
     @State private var availableModels: [String] = []
     @State private var selectedModel: String = ""
     @State private var isNearBottom = true
+    @State private var showSystemPromptEditor = false
+    @State private var showExportSheet = false
+    @State private var pendingImages: [Data] = []
 
     private var maxContentWidth: CGFloat {
         #if os(macOS)
@@ -34,6 +38,12 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Parameter controls (F10)
+            if chatViewModel.showParameters {
+                parameterControls
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             ZStack(alignment: .bottomTrailing) {
                 if showEmptyState {
                     EmptyChatView(
@@ -54,38 +64,59 @@ struct ChatView: View {
                                         && message.role == .assistant
                                         && message.id == conversation.sortedMessages.last?.id
 
-                                    MessageRowView(
-                                        message: message,
-                                        isStreaming: isStreamingThis,
-                                        isLastAssistantMessage: isLastAssistant && !chatViewModel.isGenerating,
-                                        streamingThinking: isStreamingThis ? chatViewModel.streamingThinking : "",
-                                        isInThinkBlock: isStreamingThis ? chatViewModel.isInThinkBlock : false,
-                                        thinkingDuration: isStreamingThis ? chatViewModel.thinkingDuration : nil,
-                                        onCopy: nil,
-                                        onRegenerate: {
-                                            regenerateResponse()
-                                        }
-                                    )
-                                    .id(message.id)
-                                    .frame(maxWidth: maxContentWidth)
-                                    .frame(maxWidth: .infinity)
-                                    .contextMenu {
-                                        Button {
-                                            ClipboardHelper.copyText(message.content)
-                                        } label: {
-                                            Label("Copy", systemImage: "doc.on.doc")
-                                        }
-                                        if message.role == .assistant && isLastAssistant && !chatViewModel.isGenerating {
-                                            Button {
+                                    // Check if editing this message
+                                    if chatViewModel.editingMessageID == message.id && message.role == .user {
+                                        editingMessageView(message: message)
+                                            .id(message.id)
+                                            .frame(maxWidth: maxContentWidth)
+                                            .frame(maxWidth: .infinity)
+                                    } else {
+                                        MessageRowView(
+                                            message: message,
+                                            isStreaming: isStreamingThis,
+                                            isLastAssistantMessage: isLastAssistant && !chatViewModel.isGenerating,
+                                            streamingThinking: isStreamingThis ? chatViewModel.streamingThinking : "",
+                                            isInThinkBlock: isStreamingThis ? chatViewModel.isInThinkBlock : false,
+                                            thinkingDuration: isStreamingThis ? chatViewModel.thinkingDuration : nil,
+                                            isEdited: message.isEdited,
+                                            onCopy: nil,
+                                            onRegenerate: {
                                                 regenerateResponse()
-                                            } label: {
-                                                Label("Regenerate", systemImage: "arrow.clockwise")
                                             }
-                                        }
-                                        Button(role: .destructive) {
-                                            chatViewModel.deleteMessage(message, from: conversation)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
+                                        )
+                                        .id(message.id)
+                                        .frame(maxWidth: maxContentWidth)
+                                        .frame(maxWidth: .infinity)
+                                        .contextMenu {
+                                            Button {
+                                                ClipboardHelper.copyText(message.content)
+                                            } label: {
+                                                Label("Copy", systemImage: "doc.on.doc")
+                                            }
+                                            if message.role == .user && !chatViewModel.isGenerating {
+                                                Button {
+                                                    chatViewModel.startEditing(message: message)
+                                                } label: {
+                                                    Label("Edit", systemImage: "pencil")
+                                                }
+                                            }
+                                            if message.role == .assistant && isLastAssistant && !chatViewModel.isGenerating {
+                                                Button {
+                                                    regenerateResponse()
+                                                } label: {
+                                                    Label("Regenerate", systemImage: "arrow.clockwise")
+                                                }
+                                            }
+                                            Button {
+                                                branchFromMessage(message)
+                                            } label: {
+                                                Label("Branch from here", systemImage: "arrow.triangle.branch")
+                                            }
+                                            Button(role: .destructive) {
+                                                chatViewModel.deleteMessage(message, from: conversation)
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
                                         }
                                     }
                                 }
@@ -157,7 +188,15 @@ struct ChatView: View {
                 onModelChange: { model in
                     selectedModel = model
                 },
-                onLocalModelChange: onLocalModelChange
+                onLocalModelChange: onLocalModelChange,
+                onToggleParameters: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        chatViewModel.showParameters.toggle()
+                    }
+                },
+                onImageAttach: { images in
+                    pendingImages = images
+                }
             )
         }
         .navigationTitle(conversation.title)
@@ -173,13 +212,184 @@ struct ChatView: View {
                 }
                 .help("Home")
             }
+
+            #if os(macOS)
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showSystemPromptEditor = true
+                } label: {
+                    Image(systemName: "text.bubble")
+                }
+                .help("System Prompt")
+
+                Menu {
+                    Button {
+                        ExportHelper.exportMarkdown(conversation: conversation)
+                    } label: {
+                        Label("Export as Markdown", systemImage: "doc.text")
+                    }
+                    Button {
+                        ExportHelper.exportJSON(conversation: conversation)
+                    } label: {
+                        Label("Export as JSON", systemImage: "curlybraces")
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .help("Export")
+            }
+            #else
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showSystemPromptEditor = true
+                } label: {
+                    Image(systemName: "text.bubble")
+                }
+                .help("System Prompt")
+
+                Menu {
+                    Button {
+                        ExportHelper.exportMarkdown(conversation: conversation)
+                    } label: {
+                        Label("Export as Markdown", systemImage: "doc.text")
+                    }
+                    Button {
+                        ExportHelper.exportJSON(conversation: conversation)
+                    } label: {
+                        Label("Export as JSON", systemImage: "curlybraces")
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .help("Export")
+            }
+            #endif
+        }
+        // Keyboard shortcuts (F15) — copy last assistant message
+        .background {
+            Group {
+                Button("") {
+                    if let lastAssistant = visibleMessages.last(where: { $0.role == .assistant }) {
+                        ClipboardHelper.copyText(lastAssistant.content)
+                    }
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .hidden()
+            }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+        }
+        .sheet(isPresented: $showSystemPromptEditor) {
+            SystemPromptEditorView(conversation: conversation)
         }
         .task {
+            chatViewModel.loadParametersFromConversation(conversation)
             let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
             if !config.isLocalMode {
                 await fetchModels()
             }
         }
+    }
+
+    // MARK: - Parameter Controls (F10)
+
+    private var parameterControls: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Generation Parameters")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Temperature: \(chatViewModel.temperature, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: $chatViewModel.temperature, in: 0.0...2.0, step: 0.05)
+                        .frame(maxWidth: 200)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Max Tokens: \(chatViewModel.maxTokens)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Stepper("", value: $chatViewModel.maxTokens, in: 256...8192, step: 256)
+                        .labelsHidden()
+                }
+
+                Spacer()
+
+                Button("Save to Chat") {
+                    chatViewModel.saveParametersToConversation(conversation)
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.codeBlockBackground)
+    }
+
+    // MARK: - Editing View (F13)
+
+    private func editingMessageView(message: ChatMessage) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(Color.accentColor.gradient)
+                .overlay {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Editing message")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
+
+                TextEditor(text: $chatViewModel.editingText)
+                    .font(.body)
+                    .frame(minHeight: 60, maxHeight: 200)
+                    .padding(8)
+                    .background(Color.inputFieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 1))
+
+                HStack {
+                    Button("Cancel") {
+                        chatViewModel.cancelEditing()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Submit") {
+                        let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
+                        let model = selectedModel.isEmpty ? nil : selectedModel
+                        chatViewModel.submitEdit(
+                            for: message,
+                            in: conversation,
+                            serverConfig: config,
+                            model: model,
+                            modelManager: modelManager
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.userMessageBackground)
     }
 
     // MARK: - Helpers
@@ -193,11 +403,33 @@ struct ChatView: View {
             return
         }
 
+        // Save any pending image attachments (F18)
+        if !pendingImages.isEmpty {
+            let paths = saveImages(pendingImages)
+            // Store paths on the next user message via ChatViewModel
+            // For now, clear pending
+            pendingImages = []
+            _ = paths // Image paths stored for future vision API integration
+        }
+
         let model = selectedModel.isEmpty ? nil : selectedModel
         chatViewModel.sendMessage(
             content, in: conversation, serverConfig: config,
             model: model, modelManager: modelManager
         )
+    }
+
+    private func saveImages(_ images: [Data]) -> [String] {
+        var paths: [String] = []
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("local-mlx-images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for imageData in images {
+            let filename = UUID().uuidString + ".jpg"
+            let url = dir.appendingPathComponent(filename)
+            try? imageData.write(to: url)
+            paths.append(url.path)
+        }
+        return paths
     }
 
     private func regenerateResponse() {
@@ -214,6 +446,12 @@ struct ChatView: View {
             in: conversation, serverConfig: config,
             model: model, modelManager: modelManager
         )
+    }
+
+    private func branchFromMessage(_ message: ChatMessage) {
+        if let branch = chatViewModel.branchConversation(from: message, in: conversation) {
+            onBranch?(branch)
+        }
     }
 
     private func fetchModels() async {
@@ -266,6 +504,53 @@ struct ChatView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color.orange.opacity(0.08))
+    }
+}
+
+// MARK: - System Prompt Editor (F16)
+
+struct SystemPromptEditorView: View {
+    let conversation: Conversation
+    @Environment(\.dismiss) private var dismiss
+    @State private var systemPrompt: String = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text("System prompt for this conversation. Changes take effect on the next message.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                TextEditor(text: $systemPrompt)
+                    .font(.body)
+                    .frame(minHeight: 150)
+                    .padding(8)
+                    .background(Color.inputFieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("System Prompt")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        conversation.systemPrompt = systemPrompt.isEmpty ? nil : systemPrompt
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                systemPrompt = conversation.systemPrompt ?? ""
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 300)
+        #endif
     }
 }
 

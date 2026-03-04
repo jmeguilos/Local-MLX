@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @Query private var configs: [ServerConfig]
+    @Query(sort: \Persona.name) private var personas: [Persona]
 
     @State private var baseURL = ""
     @State private var defaultModel = ""
@@ -20,6 +21,8 @@ struct SettingsView: View {
     @State private var savedLocalModelIDs: [String] = []
     @State private var savedServerModels: [String] = []
     @State private var newSavedModelID = ""
+    @State private var showNewPersona = false
+    @State private var editingPersona: Persona?
 
     private var config: ServerConfig {
         configs.first ?? ServerConfig()
@@ -150,6 +153,50 @@ struct SettingsView: View {
                     TextEditor(text: $defaultSystemPrompt)
                         .frame(minHeight: 80)
                 }
+
+                // Personas Section (F17)
+                Section("Personas") {
+                    ForEach(personas) { persona in
+                        HStack {
+                            Image(systemName: persona.icon)
+                                .font(.title3)
+                                .foregroundStyle(.purple)
+                                .frame(width: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(persona.name)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                if !persona.systemPrompt.isEmpty {
+                                    Text(persona.systemPrompt.prefix(60) + (persona.systemPrompt.count > 60 ? "..." : ""))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            Button {
+                                editingPersona = persona
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .onDelete { indexSet in
+                        for index in indexSet {
+                            modelContext.delete(personas[index])
+                        }
+                        try? modelContext.save()
+                    }
+
+                    Button {
+                        showNewPersona = true
+                    } label: {
+                        Label("New Persona", systemImage: "plus")
+                    }
+                }
             }
             .navigationTitle("Settings")
             .toolbar {
@@ -173,6 +220,12 @@ struct SettingsView: View {
                 localModelID = config.localModelID
                 savedLocalModelIDs = config.savedLocalModelIDs
                 savedServerModels = config.savedServerModels
+            }
+            .sheet(isPresented: $showNewPersona) {
+                PersonaEditorView(persona: nil)
+            }
+            .sheet(item: $editingPersona) { persona in
+                PersonaEditorView(persona: persona)
             }
         }
         #if os(macOS)
@@ -228,5 +281,128 @@ struct SettingsView: View {
             connectionError = error
             isCheckingConnection = false
         }
+    }
+}
+
+// MARK: - Persona Editor
+
+struct PersonaEditorView: View {
+    let persona: Persona?
+
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var systemPrompt = ""
+    @State private var icon = "person.circle"
+    @State private var temperature: Double?
+    @State private var maxTokens: Int?
+    @State private var useCustomTemp = false
+    @State private var useCustomTokens = false
+    @State private var tempValue: Double = 0.7
+    @State private var tokensValue: Int = 2048
+
+    private let iconOptions = [
+        "person.circle", "brain", "book", "wrench.and.screwdriver",
+        "paintbrush", "code.forking", "globe", "lightbulb"
+    ]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Name") {
+                    TextField("Persona name", text: $name)
+                }
+
+                Section("Icon") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44))], spacing: 8) {
+                        ForEach(iconOptions, id: \.self) { opt in
+                            Button {
+                                icon = opt
+                            } label: {
+                                Image(systemName: opt)
+                                    .font(.title2)
+                                    .frame(width: 40, height: 40)
+                                    .background(icon == opt ? Color.accentColor.opacity(0.2) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Section("System Prompt") {
+                    TextEditor(text: $systemPrompt)
+                        .frame(minHeight: 80)
+                }
+
+                Section("Parameters (Optional)") {
+                    Toggle("Custom Temperature", isOn: $useCustomTemp)
+                    if useCustomTemp {
+                        HStack {
+                            Text("Temperature: \(tempValue, specifier: "%.2f")")
+                                .font(.caption)
+                            Slider(value: $tempValue, in: 0...2, step: 0.05)
+                        }
+                    }
+                    Toggle("Custom Max Tokens", isOn: $useCustomTokens)
+                    if useCustomTokens {
+                        Stepper("Max Tokens: \(tokensValue)", value: $tokensValue, in: 256...8192, step: 256)
+                            .font(.caption)
+                    }
+                }
+            }
+            .navigationTitle(persona == nil ? "New Persona" : "Edit Persona")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        savePersona()
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                if let p = persona {
+                    name = p.name
+                    systemPrompt = p.systemPrompt
+                    icon = p.icon
+                    if let t = p.temperature {
+                        useCustomTemp = true
+                        tempValue = t
+                    }
+                    if let m = p.maxTokens {
+                        useCustomTokens = true
+                        tokensValue = m
+                    }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 400, minHeight: 350)
+        #endif
+    }
+
+    private func savePersona() {
+        if let existing = persona {
+            existing.name = name
+            existing.systemPrompt = systemPrompt
+            existing.icon = icon
+            existing.temperature = useCustomTemp ? tempValue : nil
+            existing.maxTokens = useCustomTokens ? tokensValue : nil
+        } else {
+            let p = Persona(
+                name: name,
+                systemPrompt: systemPrompt,
+                temperature: useCustomTemp ? tempValue : nil,
+                maxTokens: useCustomTokens ? tokensValue : nil,
+                icon: icon
+            )
+            modelContext.insert(p)
+        }
+        try? modelContext.save()
     }
 }

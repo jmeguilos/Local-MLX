@@ -42,6 +42,9 @@ struct MainView: View {
                             config.localModelID = newModelID
                             try? modelContext.save()
                         }
+                    },
+                    onBranch: { branch in
+                        selectedConversation = branch
                     }
                 )
             } else {
@@ -50,6 +53,10 @@ struct MainView: View {
                     config: currentConfig,
                     onSend: { message in
                         createConversationWithMessage(message)
+                    },
+                    onPersonaSelect: { persona in
+                        let conversation = listViewModel.createConversationFromPersona(persona)
+                        selectedConversation = conversation
                     }
                 )
             }
@@ -84,6 +91,22 @@ struct MainView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(modelManager: modelManager)
+        }
+        // Keyboard Shortcuts (F15) — handled via hidden buttons
+        .background {
+            Group {
+                Button("") { createNewConversation() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .hidden()
+                Button("") { showSettings = true }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .hidden()
+                Button("") { selectedConversation = nil }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .hidden()
+            }
+            .frame(width: 0, height: 0)
+            .opacity(0)
         }
     }
 
@@ -185,7 +208,9 @@ struct WelcomeView: View {
     let modelManager: ModelManager
     let config: ServerConfig
     let onSend: (String) -> Void
+    var onPersonaSelect: ((Persona) -> Void)? = nil
 
+    @Query(sort: \Persona.name) private var personas: [Persona]
     @State private var inputText = ""
     @State private var dynamicSuggestions: [(icon: String, text: String)] = SuggestionGenerator.fallbackSuggestions
     @FocusState private var isFocused: Bool
@@ -218,6 +243,34 @@ struct WelcomeView: View {
             // Model status
             ModelStatusChip(modelManager: modelManager, config: config)
                 .padding(.top, -8)
+
+            // Persona quick-select (F17)
+            if !personas.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(personas) { persona in
+                            Button {
+                                onPersonaSelect?(persona)
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(systemName: persona.icon)
+                                        .font(.title3)
+                                        .foregroundStyle(.purple)
+                                    Text(persona.name)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 72, height: 60)
+                                .background(Color.userMessageBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .frame(maxWidth: 520)
+            }
 
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 12),
