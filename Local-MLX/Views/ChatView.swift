@@ -10,15 +10,18 @@ struct ChatView: View {
     var onBranch: ((Conversation) -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
+    @Query private var serverConfigs: [ServerConfig]
     @State private var showScrollToBottom = false
-    @State private var contentHeight: CGFloat = 0
-    @State private var scrollViewHeight: CGFloat = 0
     @State private var availableModels: [String] = []
     @State private var selectedModel: String = ""
     @State private var isNearBottom = true
     @State private var showSystemPromptEditor = false
-    @State private var showExportSheet = false
     @State private var pendingImages: [Data] = []
+    @State private var exportErrorMessage: String?
+
+    private var currentConfig: ServerConfig {
+        serverConfigs.first ?? ServerConfig()
+    }
 
     private var maxContentWidth: CGFloat {
         #if os(macOS)
@@ -51,81 +54,27 @@ struct ChatView: View {
                             sendMessage(suggestion)
                         },
                         modelManager: modelManager,
-                        serverConfig: (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
+                        serverConfig: currentConfig
                     )
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 0) {
                                 ForEach(visibleMessages) { message in
-                                    let isLastAssistant = message.role == .assistant
-                                        && message.id == visibleMessages.last(where: { $0.role == .assistant })?.id
-                                    let isStreamingThis = chatViewModel.isGenerating
-                                        && message.role == .assistant
-                                        && message.id == conversation.sortedMessages.last?.id
-
-                                    // Check if editing this message
-                                    if chatViewModel.editingMessageID == message.id && message.role == .user {
-                                        editingMessageView(message: message)
-                                            .id(message.id)
-                                            .frame(maxWidth: maxContentWidth)
-                                            .frame(maxWidth: .infinity)
-                                    } else {
-                                        MessageRowView(
-                                            message: message,
-                                            isStreaming: isStreamingThis,
-                                            isLastAssistantMessage: isLastAssistant && !chatViewModel.isGenerating,
-                                            streamingThinking: isStreamingThis ? chatViewModel.streamingThinking : "",
-                                            isInThinkBlock: isStreamingThis ? chatViewModel.isInThinkBlock : false,
-                                            thinkingDuration: isStreamingThis ? chatViewModel.thinkingDuration : nil,
-                                            isEdited: message.isEdited,
-                                            onCopy: nil,
-                                            onRegenerate: {
-                                                regenerateResponse()
-                                            }
-                                        )
-                                        .id(message.id)
-                                        .frame(maxWidth: maxContentWidth)
-                                        .frame(maxWidth: .infinity)
-                                        .contextMenu {
-                                            Button {
-                                                ClipboardHelper.copyText(message.content)
-                                            } label: {
-                                                Label("Copy", systemImage: "doc.on.doc")
-                                            }
-                                            if message.role == .user && !chatViewModel.isGenerating {
-                                                Button {
-                                                    chatViewModel.startEditing(message: message)
-                                                } label: {
-                                                    Label("Edit", systemImage: "pencil")
-                                                }
-                                            }
-                                            if message.role == .assistant && isLastAssistant && !chatViewModel.isGenerating {
-                                                Button {
-                                                    regenerateResponse()
-                                                } label: {
-                                                    Label("Regenerate", systemImage: "arrow.clockwise")
-                                                }
-                                            }
-                                            Button {
-                                                branchFromMessage(message)
-                                            } label: {
-                                                Label("Branch from here", systemImage: "arrow.triangle.branch")
-                                            }
-                                            Button(role: .destructive) {
-                                                chatViewModel.deleteMessage(message, from: conversation)
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
-                                            }
-                                        }
-                                    }
+                                    messageCell(for: message)
                                 }
 
                                 Color.clear
                                     .frame(height: 1)
                                     .id("scroll-anchor")
-                                    .onAppear { isNearBottom = true }
-                                    .onDisappear { isNearBottom = false }
+                                    .onAppear {
+                                        isNearBottom = true
+                                        showScrollToBottom = false
+                                    }
+                                    .onDisappear {
+                                        isNearBottom = false
+                                        showScrollToBottom = true
+                                    }
                             }
                             .padding(.vertical, 8)
                             .animation(.easeOut(duration: 0.25), value: visibleMessages.count)
@@ -144,25 +93,42 @@ struct ChatView: View {
                         .onAppear {
                             scrollToBottom(proxy: proxy, animated: false)
                         }
+                        .overlay(alignment: .bottomTrailing) {
+                            // Scroll-to-bottom button
+                            if showScrollToBottom {
+                                Button {
+                                    scrollToBottom(proxy: proxy, animated: true)
+                                } label: {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                        .font(.title2)
+                                        .symbolRenderingMode(.hierarchical)
+                                        .foregroundStyle(.secondary)
+                                        .background(Circle().fill(Color.surfaceBackground).padding(2))
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.trailing, 16)
+                                .padding(.bottom, 8)
+                                .transition(.opacity.combined(with: .scale))
+                            }
+                        }
                     }
                 }
+            }
 
-                // Scroll-to-bottom button
-                if showScrollToBottom && !showEmptyState {
-                    Button {
-                        showScrollToBottom = false
-                    } label: {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.title2)
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.secondary)
-                            .background(Circle().fill(Color.surfaceBackground).padding(2))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 8)
-                    .transition(.opacity.combined(with: .scale))
+            // Model loading banner
+            if currentConfig.isLocalMode && modelManager.modelState == .loading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading model…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.codeBlockBackground)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             // Error banner
@@ -178,7 +144,7 @@ struct ChatView: View {
                 currentModel: selectedModel,
                 availableModels: availableModels,
                 modelManager: modelManager,
-                serverConfig: (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig(),
+                serverConfig: currentConfig,
                 onSend: { content in
                     sendMessage(content)
                 },
@@ -215,53 +181,11 @@ struct ChatView: View {
 
             #if os(macOS)
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showSystemPromptEditor = true
-                } label: {
-                    Image(systemName: "text.bubble")
-                }
-                .help("System Prompt")
-
-                Menu {
-                    Button {
-                        ExportHelper.exportMarkdown(conversation: conversation)
-                    } label: {
-                        Label("Export as Markdown", systemImage: "doc.text")
-                    }
-                    Button {
-                        ExportHelper.exportJSON(conversation: conversation)
-                    } label: {
-                        Label("Export as JSON", systemImage: "curlybraces")
-                    }
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .help("Export")
+                toolbarActions
             }
             #else
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    showSystemPromptEditor = true
-                } label: {
-                    Image(systemName: "text.bubble")
-                }
-                .help("System Prompt")
-
-                Menu {
-                    Button {
-                        ExportHelper.exportMarkdown(conversation: conversation)
-                    } label: {
-                        Label("Export as Markdown", systemImage: "doc.text")
-                    }
-                    Button {
-                        ExportHelper.exportJSON(conversation: conversation)
-                    } label: {
-                        Label("Export as JSON", systemImage: "curlybraces")
-                    }
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .help("Export")
+                toolbarActions
             }
             #endif
         }
@@ -282,13 +206,66 @@ struct ChatView: View {
         .sheet(isPresented: $showSystemPromptEditor) {
             SystemPromptEditorView(conversation: conversation)
         }
+        .alert("Export Failed", isPresented: .init(
+            get: { exportErrorMessage != nil },
+            set: { if !$0 { exportErrorMessage = nil } }
+        )) {
+            Button("OK") { exportErrorMessage = nil }
+        } message: {
+            if let error = exportErrorMessage {
+                Text(error)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .exportError)) { notification in
+            if let error = notification.userInfo?["error"] as? String {
+                exportErrorMessage = error
+            }
+        }
         .task {
             chatViewModel.loadParametersFromConversation(conversation)
-            let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
-            if !config.isLocalMode {
+            if !currentConfig.isLocalMode {
                 await fetchModels()
             }
         }
+    }
+
+    // MARK: - Toolbar Actions
+
+    @ViewBuilder
+    private var toolbarActions: some View {
+        Button {
+            showSystemPromptEditor = true
+        } label: {
+            Image(systemName: "text.bubble")
+        }
+        .help("System Prompt")
+
+        Menu {
+            Button {
+                if let error = ExportHelper.exportMarkdown(conversation: conversation) {
+                    exportErrorMessage = error
+                }
+            } label: {
+                Label("Export as Markdown", systemImage: "doc.text")
+            }
+            Button {
+                if let error = ExportHelper.exportJSON(conversation: conversation) {
+                    exportErrorMessage = error
+                }
+            } label: {
+                Label("Export as JSON", systemImage: "curlybraces")
+            }
+            Button {
+                if let error = ExportHelper.exportPlainText(conversation: conversation) {
+                    exportErrorMessage = error
+                }
+            } label: {
+                Label("Export as Plain Text", systemImage: "doc.plaintext")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+        }
+        .help("Export")
     }
 
     // MARK: - Parameter Controls (F10)
@@ -337,6 +314,78 @@ struct ChatView: View {
         .background(Color.codeBlockBackground)
     }
 
+    // MARK: - Message Cell
+
+    @ViewBuilder
+    private func messageCell(for message: ChatMessage) -> some View {
+        let lastAssistantID = visibleMessages.last(where: { $0.role == .assistant })?.id
+        let isLastAssistant = message.role == .assistant && message.id == lastAssistantID
+        let isStreamingThis = chatViewModel.isGenerating
+            && message.role == .assistant
+            && message.id == conversation.sortedMessages.last?.id
+
+        if chatViewModel.editingMessageID == message.id && message.role == .user {
+            editingMessageView(message: message)
+                .id(message.id)
+                .frame(maxWidth: maxContentWidth)
+                .frame(maxWidth: .infinity)
+        } else {
+            messageRowWithContext(message: message, isLastAssistant: isLastAssistant, isStreamingThis: isStreamingThis)
+                .id(message.id)
+                .frame(maxWidth: maxContentWidth)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func messageRowWithContext(message: ChatMessage, isLastAssistant: Bool, isStreamingThis: Bool) -> some View {
+        MessageRowView(
+            message: message,
+            isStreaming: isStreamingThis,
+            isLastAssistantMessage: isLastAssistant && !chatViewModel.isGenerating,
+            streamingThinking: isStreamingThis ? chatViewModel.streamingThinking : "",
+            isInThinkBlock: isStreamingThis ? chatViewModel.isInThinkBlock : false,
+            thinkingDuration: isStreamingThis ? chatViewModel.thinkingDuration : nil,
+            isEdited: message.isEdited,
+            generationSpeed: (isLastAssistant && !chatViewModel.isGenerating) ? chatViewModel.lastGenerationSpeed : nil,
+            onCopy: nil,
+            onRegenerate: {
+                regenerateResponse()
+            }
+        )
+        .contextMenu {
+            Button {
+                ClipboardHelper.copyText(message.content)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            if message.role == .user && !chatViewModel.isGenerating {
+                Button {
+                    chatViewModel.startEditing(message: message)
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+            }
+            if message.role == .assistant && isLastAssistant && !chatViewModel.isGenerating {
+                Button {
+                    regenerateResponse()
+                } label: {
+                    Label("Regenerate", systemImage: "arrow.clockwise")
+                }
+            }
+            Button {
+                branchFromMessage(message)
+            } label: {
+                Label("Branch from here", systemImage: "arrow.triangle.branch")
+            }
+            Button(role: .destructive) {
+                chatViewModel.deleteMessage(message, from: conversation)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
     // MARK: - Editing View (F13)
 
     private func editingMessageView(message: ChatMessage) -> some View {
@@ -371,12 +420,11 @@ struct ChatView: View {
                     .buttonStyle(.bordered)
 
                     Button("Submit") {
-                        let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
                         let model = selectedModel.isEmpty ? nil : selectedModel
                         chatViewModel.submitEdit(
                             for: message,
                             in: conversation,
-                            serverConfig: config,
+                            serverConfig: currentConfig,
                             model: model,
                             modelManager: modelManager
                         )
@@ -395,27 +443,23 @@ struct ChatView: View {
     // MARK: - Helpers
 
     private func sendMessage(_ content: String) {
-        let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first)
-            ?? ServerConfig()
-
-        if config.isLocalMode && modelManager.modelState != .loaded {
+        if currentConfig.isLocalMode && modelManager.modelState != .loaded {
             chatViewModel.errorMessage = "Local model not loaded"
             return
         }
 
         // Save any pending image attachments (F18)
+        var imagePaths: [String] = []
         if !pendingImages.isEmpty {
-            let paths = saveImages(pendingImages)
-            // Store paths on the next user message via ChatViewModel
-            // For now, clear pending
+            imagePaths = saveImages(pendingImages)
             pendingImages = []
-            _ = paths // Image paths stored for future vision API integration
         }
 
         let model = selectedModel.isEmpty ? nil : selectedModel
         chatViewModel.sendMessage(
-            content, in: conversation, serverConfig: config,
-            model: model, modelManager: modelManager
+            content, in: conversation, serverConfig: currentConfig,
+            model: model, modelManager: modelManager,
+            imagePaths: imagePaths
         )
     }
 
@@ -433,17 +477,14 @@ struct ChatView: View {
     }
 
     private func regenerateResponse() {
-        let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first)
-            ?? ServerConfig()
-
-        if config.isLocalMode && modelManager.modelState != .loaded {
+        if currentConfig.isLocalMode && modelManager.modelState != .loaded {
             chatViewModel.errorMessage = "Local model not loaded"
             return
         }
 
         let model = selectedModel.isEmpty ? nil : selectedModel
         chatViewModel.regenerateLastResponse(
-            in: conversation, serverConfig: config,
+            in: conversation, serverConfig: currentConfig,
             model: model, modelManager: modelManager
         )
     }
@@ -455,15 +496,14 @@ struct ChatView: View {
     }
 
     private func fetchModels() async {
-        let config = (try? modelContext.fetch(FetchDescriptor<ServerConfig>()).first) ?? ServerConfig()
-        let client = MLXServerClient(baseURL: config.baseURL)
+        let client = MLXServerClient(baseURL: currentConfig.baseURL)
         do {
             let models = try await client.fetchModels()
             availableModels = models
             if selectedModel.isEmpty {
-                selectedModel = config.defaultModel.isEmpty
+                selectedModel = currentConfig.defaultModel.isEmpty
                     ? (models.first ?? "")
-                    : config.defaultModel
+                    : currentConfig.defaultModel
             }
         } catch {
             // Models will just be empty — user can still type

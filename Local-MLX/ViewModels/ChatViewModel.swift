@@ -11,6 +11,7 @@ final class ChatViewModel {
     var thinkingStartTime: Date?
     var thinkingDuration: TimeInterval?
     var errorMessage: String?
+    var lastGenerationSpeed: Double? // tokens per second
 
     // Generation parameters (UI-controlled)
     var temperature: Double = 0.7
@@ -48,10 +49,13 @@ final class ChatViewModel {
         in conversation: Conversation,
         serverConfig: ServerConfig,
         model: String? = nil,
-        modelManager: ModelManager? = nil
+        modelManager: ModelManager? = nil,
+        imagePaths: [String] = []
     ) {
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard !isGenerating else { return }
+
+        HapticManager.medium()
 
         // Check for /search command (F26)
         let (isSearch, query) = WebSearchService.isSearchRequest(content)
@@ -70,13 +74,15 @@ final class ChatViewModel {
         }
 
         let userMessage = ChatMessage(role: .user, content: content, conversation: conversation)
+        if !imagePaths.isEmpty {
+            userMessage.imageAttachmentPaths = imagePaths
+        }
         conversation.messages.append(userMessage)
         conversation.updatedAt = Date()
 
         if conversation.messages.count == 1 || conversation.title == "New Conversation" {
             conversation.title = String(content.prefix(40))
         }
-
         try? modelContext?.save()
 
         generateResponse(for: conversation, serverConfig: serverConfig, model: model, modelManager: modelManager)
@@ -127,7 +133,9 @@ final class ChatViewModel {
         thinkingStartTime = nil
         thinkingDuration = nil
         errorMessage = nil
+        lastGenerationSpeed = nil
 
+        let generationStartTime = Date()
         let assistantMessage = ChatMessage(role: .assistant, content: "", conversation: conversation)
         conversation.messages.append(assistantMessage)
 
@@ -205,6 +213,11 @@ final class ChatViewModel {
                     }
                 }
                 HapticManager.success()
+                // Calculate tokens/sec
+                let elapsed = Date().timeIntervalSince(generationStartTime)
+                if let completionTokens = assistantMessage.completionTokens, completionTokens > 0, elapsed > 0 {
+                    lastGenerationSpeed = Double(completionTokens) / elapsed
+                }
                 try? modelContext?.save()
             } catch {
                 if !Task.isCancelled {

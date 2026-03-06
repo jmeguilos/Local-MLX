@@ -361,6 +361,11 @@ struct ConversationListView: View {
             } label: {
                 Label("JSON", systemImage: "curlybraces")
             }
+            Button {
+                ExportHelper.exportPlainText(conversation: conversation)
+            } label: {
+                Label("Plain Text", systemImage: "doc.plaintext")
+            }
         } label: {
             Label("Export", systemImage: "square.and.arrow.up")
         }

@@ -156,7 +156,39 @@ enum SuggestionGenerator {
 
     private static let dynamicIcons = ["lightbulb", "brain", "book", "globe"]
 
+    /// Cached suggestions so multiple views don't re-generate them.
+    private static var cachedSuggestions: [(icon: String, text: String)]?
+    private static var cacheTask: Task<[(icon: String, text: String)], Never>?
+
+    /// Clears the cache so next call regenerates. Call when config changes.
+    static func invalidateCache() {
+        cachedSuggestions = nil
+        cacheTask?.cancel()
+        cacheTask = nil
+    }
+
     static func generateSuggestions(config: ServerConfig, modelManager: ModelManager) async -> [(icon: String, text: String)] {
+        // Return cache immediately if available
+        if let cached = cachedSuggestions {
+            return cached
+        }
+
+        // If there's already a generation in progress, await it
+        if let existingTask = cacheTask {
+            return await existingTask.value
+        }
+
+        let task = Task<[(icon: String, text: String)], Never> {
+            let result = await fetchSuggestions(config: config, modelManager: modelManager)
+            cachedSuggestions = result
+            cacheTask = nil
+            return result
+        }
+        cacheTask = task
+        return await task.value
+    }
+
+    private static func fetchSuggestions(config: ServerConfig, modelManager: ModelManager) async -> [(icon: String, text: String)] {
         let prompt = "Generate 4 short conversation starters as a JSON array of strings. Each should be a single sentence, diverse in topic. Return ONLY the JSON array, no other text."
         let messages: [(role: String, content: String)] = [
             (role: "user", content: prompt)
@@ -349,7 +381,6 @@ struct WelcomeView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         inputText = ""
-        HapticManager.medium()
         onSend(text)
     }
 }

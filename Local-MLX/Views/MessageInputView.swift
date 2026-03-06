@@ -231,7 +231,6 @@ struct MessageInputView: View {
         }
 
         inputText = ""
-        HapticManager.medium()
         onSend(text.isEmpty ? "[Image attached]" : text)
     }
 }

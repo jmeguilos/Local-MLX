@@ -9,6 +9,7 @@ struct MessageRowView: View {
     var isInThinkBlock: Bool = false
     var thinkingDuration: TimeInterval? = nil
     var isEdited: Bool = false
+    var generationSpeed: Double? = nil
     let onCopy: (() -> Void)?
     let onRegenerate: (() -> Void)?
     var onEdit: ((String) -> Void)? = nil
@@ -21,6 +22,7 @@ struct MessageRowView: View {
         isInThinkBlock: Bool = false,
         thinkingDuration: TimeInterval? = nil,
         isEdited: Bool = false,
+        generationSpeed: Double? = nil,
         onCopy: (() -> Void)? = nil,
         onRegenerate: (() -> Void)? = nil,
         onEdit: ((String) -> Void)? = nil
@@ -32,6 +34,7 @@ struct MessageRowView: View {
         self.isInThinkBlock = isInThinkBlock
         self.thinkingDuration = thinkingDuration
         self.isEdited = isEdited
+        self.generationSpeed = generationSpeed
         self.onCopy = onCopy
         self.onRegenerate = onRegenerate
         self.onEdit = onEdit
@@ -69,12 +72,18 @@ struct MessageRowView: View {
                     HStack {
                         actionBar
 
-                        // Token usage badge (F19)
+                        // Token usage and speed badges (F19)
                         if let tokens = message.totalTokens {
                             Text("\(tokens) tokens")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
                                 .padding(.leading, 8)
+                        }
+
+                        if let speed = generationSpeed {
+                            Text("\(speed, specifier: "%.1f") tok/s")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
                         }
                     }
                     .transition(.opacity)
@@ -246,16 +255,26 @@ struct MessageRowView: View {
 
     // MARK: - Action Bar
 
+    @State private var showCopied = false
+
     private var actionBar: some View {
         HStack(spacing: 12) {
             Button {
                 ClipboardHelper.copyText(message.content)
                 HapticManager.light()
+                showCopied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    showCopied = false
+                }
                 onCopy?()
             } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Label(
+                    showCopied ? "Copied" : "Copy",
+                    systemImage: showCopied ? "checkmark" : "doc.on.doc"
+                )
+                .font(.caption)
+                .foregroundStyle(showCopied ? .green : .secondary)
+                .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
 
